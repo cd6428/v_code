@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Document</title>
+</head>
+<body>
+  
+</body>
+<script>
+
+  // defineAsyncComponent高阶组件，返回一个包装组件
+  const defineAsyncComponent = (options) => {
+    if (typeof options === 'function') {
+      options = {
+        loader: options
+      }
+    }
+    const {loader} = options
+    let InnerComp = null
+    return {
+      name: 'AsyncWrapperComponent',
+      setup () {
+        const loaded = ref(false)
+        const timeout = ref(false)
+        loader().then(c => {
+          InnerComp = c
+          loaded.value = true
+        })
+        let timer = null
+        if (options.timeout) {
+          timer = setTimeout(() => {
+            timeout.value = true
+          }, options.timeout);
+        }
+
+        onUnmounted(() => clearTimeout(timer))
+
+        const placeholder = {type: Text, children: ''}
+        
+        return () => {
+          if (loaded.value) {
+            return {type: InnerComp}
+          } else if (timeout.value) {
+            return options.errorComponent ? {type: options.errorComponent} : placeholder
+          } 
+          return placeholder
+        }
+      }
+    }
+  }
+
+
+
+
+
+
+
+
+
+</script>
+</html>

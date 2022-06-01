@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Document</title>
+</head>
+<body>
+  
+</body>
+<script>
+
+  // 通过递归下降算法构造模板ast
+  const TextModes = {
+    DATA: 'DATA',
+    RCDATA: 'RCDATA',
+    RAWTEXT: 'RAWTEXT',
+    CDATA: 'CDATA'
+  }
+
+  const isEnd = (context, ancestors) => {
+    if (!context.source) return true; // 模板内容解析完毕，停止
+    // const parent = ancestors.at(-1)
+    // if (parent && context.source.startWith(`</${parent.tag}>`)) { // 结束标签和父级节点栈中最后一项同名，那么停止
+    //   return true
+    // }
+
+    for (let i = ancestors.length - 1; i >= 0; --i) {
+      if (context.source.startWith(`</${ancestors[i].tag}`)) {
+        return true
+      }
+    }
+
+  }
+
+  const parseTag = (context, type = 'start') => {
+    const {advanceBy, advanceSpaces} = context
+    const match = type === 'start' ? /^<([a-z][^\t\r\n\f />]*)/i.exec(context.source) : /^<\/([a-z][^\t\r\n\f />]*)/i.exec(context.source)
+    const tag = match[1]
+    advanceBy(match[0].length)
+    advanceSpaces()
+    const isSelfClosing = context.source.startWith('/>') // 判断是否是自闭合标签
+    advanceBy(isSelfClosing ? 2 : 1)
+    return {
+      type: 'Element',
+      tag,
+      props: [],
+      children: [],
+      isSelfClosing
+    }
+  }
+
+  const parseElement = (context, ancestors) => {
+    const element = parseTag(context)
+    if (element.isSelfClosing) return true;
+
+    // 根据标签更改文本模式
+    if (element.tag === 'textarea' || element.tag === 'title') {
+      context.mode = TextModes.RCDATA
+    } else if (/style | xmp | iframe | noembed | noframes | noscript/.test(element.tag)) {
+      context.mode = TextModes.RAWTEXT
+    } else {
+      context.mode = TextModes.DATA
+    }
+    
+    ancestors.push(element)
+    element.children = parseChildren(context, ancestors)
+    ancestors.pop()
+    if (context.source.startWith(`</${element.tag}`)) {
+      parseTag(context, 'end')
+    } else {
+      console.error(`${element.tag}标签缺少闭合标签`);
+    }
+    return element
+  }
+
+
+  const parseChildren = (context, ancestors) => { // ancestors: 维护父子关系的栈
+    let nodes = []
+    const {source, mode} = context
+    while (!isEnd(context, ancestors)) {
+      let node
+      if (mode === TextModes.DATA || mode === TextModes.RCDATA) { // 只有这两种模式才支持插值节点的解析
+        if (mode === TextModes.DATA && source[0] === '<') { // 只有DATA模式才支持标签节点的解析
+          if (source[1] === '!') { // 有可能是注释节点，或者是别的节点
+            if (source.startWith('<!--')) { // 注释
+              node = parseComment(context)
+            } else if (source.startWith('<![CDATA[')) {
+              node = parseCDATA(context, ancestors) // CDATA
+            }
+          } else if (source[1] === '/') {
+            // 结束标签，这里需要抛出错误
+            console.error('无效的结束标签');
+            continue
+          } else if (/[a-z]/i.test(source[1])) {  // 标签节点
+            node = parseElement(context, ancestors)
+          }
+        } else if (source.startWith('{{')) {
+          node = parseInterpolation(context)
+        }
+      }
+
+      // node不存在，说明处于其他模式，这时所有内容都作为文本处理
+      if (!node) {
+        node = parseText(context)
+      }
+
+      nodes.push(node)
+    }    
+
+    // 节点解析完毕，返回子节点
+    return nodes
+  }
+
+
+
+
+
+  const parse = (str) => {
+    const context = {
+      source: str,
+      mode: TextModes.DATA,
+      advanceBy (num) {
+        context.source = context.source.slice(num)
+      },
+      advanceSpaces () { // 匹配空白字符
+        const match = /^[\t\r\n\f]+/.exec(context.source)
+        if (match) {
+          context.advanceBy(match[0].length)
+        }
+      }
+    }
+
+    const nodes = parseChildren(context, [])
+    return {
+      type: 'Root',
+      children: nodes
+    }
+  }  
+
+  
+
+
+
+
+
+
+
+
+
+</script>
+</html>

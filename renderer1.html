@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Document</title>
+  <script src="https://unpkg.com/@vue/reactivity@3.0.5/dist/reactivity.global.js"></script>
+</head>
+<body>
+  <div id="app"></div>
+</body>
+<script>
+  // 7.1 渲染器的基本概念
+  
+  function createRenderer() {
+    const render = (vnode, container) => {
+      if (vnode) {
+        patch(container._vnode, vnode, container) // 挂载或更新
+      } else {
+        if (container._vnode) {
+          container.innerHTML = '' // 卸载
+        }
+      }
+      container._vnode = vnode
+    }
+    return {
+      render
+    }
+  }
+
+
+
+
+
+
+
+
+
+
+</script>
+</html>

@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Document</title>
+</head>
+<body>
+  
+</body>
+<script>
+  const bucket = new WeakMap()
+  let activeEffect
+  const data = {foo: 1, get bar () {
+    return this.foo
+  }}
+  const effectStack = []
+
+  const p = new Proxy(data, {
+    get (target, key, receiver) {
+      track(target, key)
+      return Reflect.get(...arguments)
+    },
+    set (target, key, val) {
+      // target[key] = val
+      Reflect.set(...arguments)
+      trigger(target, key)
+    }
+  })
+
+  function track (target, key) {
+    if (!activeEffect) return; 
+    let depsMap = bucket.get(target)
+    if (!depsMap) bucket.set(target, (depsMap = new Map()));
+    let deps = depsMap.get(key)
+    if (!deps) depsMap.set(key, (deps = new Set())); 
+    deps.add(activeEffect)
+    activeEffect.deps.push(deps)
+  }
+
+  const trigger = (target, key) => {
+    const depsMap = bucket.get(target)
+    if (!depsMap) return;
+    const deps = depsMap.get(key)
+    const effectDeps = new Set()
+    deps && deps.forEach(item => {
+      if (item !== activeEffect) {
+        effectDeps.add(item)
+      }
+    })
+    effectDeps.forEach(fn => {
+      if (fn.options.scheduler) {
+        fn.options.scheduler(fn)  // 执行调度器函数，并传递副作用函数作为参数
+      } else {
+        fn()
+      }
+    })
+  }
+
+  const effect = (fn, options = {}) => {
+    const effectFn = () => {
+      cleanup(effectFn)
+      activeEffect = effectFn
+      effectStack.push(effectFn)
+      const res = fn()
+      effectStack.pop()
+      activeEffect = effectStack.at(-1)
+      return res
+    }
+    effectFn.options = options
+    effectFn.deps = []
+    if (!options.lazy) {
+      effectFn()
+    }
+    return effectFn
+  }
+
+  const cleanup = (effectFn) => {
+    for (let i = 0; i < effectFn.deps.length; i++) {
+      const dep = effectFn.deps[i];
+      dep.delete(effectFn)
+    }
+    effectFn.deps.length = 0
+  }
+
+
+
+  effect(() => {
+    console.log(p.bar);
+  })
+
+  p.foo++
+
+
+
+
+  const o = new Proxy(data, {
+    has (target, key) {
+      track(target, key)
+      return Reflect.has(target, key)
+    }
+  })
+
+
+
+
+
+
+</script>
+</html>

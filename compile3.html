@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Document</title>
+</head>
+<body>
+  
+</body>
+<script>
+  // 构造JavaScript ast
+  const State = {
+    initial: 1,   // 初始状态
+    tagOpen: 2,   // 标签开始状态
+    tagName: 3,   // 标签名称状态
+    text: 4,      // 文本状态
+    tagEnd: 5,    // 结束标签状态
+    tagEndName: 6 // 结束标签名称状态
+  }
+
+  const isAlpha = (char) => { // 用于判断是否是字母
+    return char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z'
+  }
+
+
+  const tokenize = (str) => { // 用于切割模板，返回token数组
+    let currentState = State.initial
+    const chars = [] // 用于缓存字符
+    const tokens = [] // 存储生成的token，并作为函数返回值进行返回
+    while (str) { // 使用while循环开启自动机，只要str没有被消费尽，自动机就会一直运行
+      const char = str[0]
+      switch (currentState) {
+        case State.initial:
+          if (char === '<') {
+            currentState = State.tagOpen
+            str = str.slice(1)
+          } else if (isAlpha(char)) {
+            currentState = State.text
+            chars.push(char)
+            str = str.slice(1)
+          }
+          break;
+        case State.tagOpen:
+          if (isAlpha(char)) {
+            currentState = State.tagName
+            chars.push(char)
+            str = str.slice(1)
+          } else if (char === '/') {
+            currentState = State.tagEnd
+            str = str.slice(1)
+          }
+          break;
+        case State.tagName:
+          if (isAlpha(char)) {
+            chars.push(char)
+            str = str.slice(1)
+          } else if (char === '>') {
+            currentState = State.initial
+            tokens.push({
+              type: 'tag',
+              name: chars.join('')
+            })
+            chars.length = 0
+            str = str.slice(1)
+          }
+          break;
+        case State.text:
+          if (isAlpha(char)) {
+            chars.push(char)
+            str = str.slice(1)
+          } else if (char === '<') {
+            currentState = State.tagOpen
+            tokens.push({
+              type: 'text',
+              content: chars.join('')
+            })
+            chars.length = 0
+            str = str.slice(1)
+          }
+          break;
+        case State.tagEnd:
+          if (isAlpha(char)) {
+            currentState = State.tagEndName
+            chars.push(char)
+            str = str.slice(1)
+          }
+          break;
+        case State.tagEndName:
+          if (isAlpha(char)) {
+            chars.push(char)
+            str = str.slice(1)
+          } else if (char === '>') {
+            currentState = State.initial
+            tokens.push({
+              type: 'tagEnd',
+              name: chars.join('')
+            })
+            chars.length = 0
+            str = str.slice(1)
+          }
+          break;
+      }
+    }
+    return tokens
+  }
+
+  const parse = (str) => { // 解析器，返回模板ast
+    const tokens = tokenize(str)
+    const root = {
+      type: 'Root',
+      children: []
+    }
+    const elementStack = [root] // 及其重要，构造父子关系的关键角色
+    while (tokens.length) {
+      const parent = elementStack.at(-1)
+      const t = tokens[0]
+      switch (t.type) {
+        case 'tag':
+          const elementNode = {
+            type: 'Element',
+            tag: t.name,
+            children: []
+          }
+          parent.children.push(elementNode)
+          elementStack.push(elementNode)
+          break;
+        case 'text':
+          const textNode = {
+            type: 'Text',
+            content: t.content
+          }
+          parent.children.push(textNode)
+          break;
+        case 'tagEnd':
+          elementStack.pop()
+          break;
+      }
+      tokens.shift()
+    }
+    return root
+  }
+
+
+  const dump = (node, indent = 0) => {
+    const type = node.type
+    const desc = node.type === 'Root' ? '' : node.type === 'Element' ? node.tag : node.content
+    console.log(`${'-'.repeat(indent)}${type}:${desc}`);
+    if (node.children) {
+      node.children.forEach(n => dump(n, indent + 2))
+    }
+  }
+
+  const traverseNode = (ast, context) => {  // 遍历节点
+    context.currentNode = ast
+    const exitFns = []  // 退出阶段的回调函数数组
+    const transforms = context.nodeTransforms
+    for (let i = 0; i < transforms.length; i++) {
+      const onExit =  transforms[i](context.currentNode, context)
+      if (onExit) { // 通过转换函数返回一个函数，将该函数作为退出阶段的回调函数添加到exitFns数组中
+        exitFns.push(onExit)
+      }
+      if (!context.currentNode) return  // 当前节点被移除后，停止执行后续转换函数
+    }
+    
+    const children = context.currentNode.children
+    if (children) {
+      for (let i = 0; i < children.length; i++) {
+        context.parent = context.currentNode
+        context.childIndex = i
+        traverseNode(children[i], context)
+      }
+    }
+
+    // 在节点处理的最后阶段执行缓存到exitFns中的回调函数(回到上一个traverseNode函数中)
+    // 注意这里需要从末尾函数开始往前执行
+    let i = exitFns.length
+    while (i--) {
+      exitFns[i]()
+    }
+  }
+
+
+  const transformElement = (node) => {  // 转换函数
+    // if (node.type === 'Element' && node.tag === 'p') {
+    //   node.tag = 'h1'
+    // }
+    return () => {
+      // 返回一个在退出阶段执行的回调函数，当这里代码执行时当前转换节点的子节点一定都处理完毕了
+      if (node.type !== 'Element') return;
+      const callExp = createCallExpression('h', [
+        createStringLiteral(node.tag)
+      ])
+      node.children.length === 1 ? callExp.arguments.push(node.children[0].jsNode) : callExp.arguments.push(createArrayExpression(node.children.map(c => c.jsNode)))
+      node.jsNode = callExp
+    }
+  }
+
+  const transformText = (node, context) => {   // 转换函数
+    // if (node.type === 'Text') {
+    //   // node.content = node.content.repeat(2)
+    //   context.replaceNode({
+    //     type: 'Element',
+    //     tag: 'span'
+    //   })
+    // }
+      if (node.type !== 'Text') return;
+      node.jsNode = createStringLiteral(node.content)
+  }
+
+  const transformRoot = (node) => {
+    return () => {
+      if (node.type !== 'Root') return;
+      const vnodeJSast = node.children[0].jsNode
+      node.jsNode = {
+        type: 'FunctionDecl',
+        id: {type: 'Identifier', name: 'render'},
+        params: [],
+        body: [
+          {
+            type: 'ReturnStatement',
+            return: vnodeJSast
+          }
+        ]
+      }
+    }
+  }
+
+  // const removeText = (node, context) => { // 转换函数
+  //   if (node.type === 'Text') {
+  //     context.removeNode()
+  //   }
+  // }
+
+  const transform = (ast) => { // 转换函数，返回JavaScript ast
+    const context = { // 上下文数据
+      currentNode: null,
+      childIndex: 0,
+      parent: null,
+      nodeTransforms: [
+        transformElement,
+        transformText,
+        transformRoot
+        // removeText
+      ],
+      replaceNode (node) {  // 替换ast中的节点
+        context.parent.children[context.childIndex] = node
+        context.currentNode = node
+      },
+      removeNode () {  // 移除ast中的节点
+        context.parent.children.splice(context.childIndex, 1)
+        context.currentNode = null
+      }
+    }
+    traverseNode(ast, context)
+    dump(ast)
+  }
+
+  const createStringLiteral = (value) => { // 用来创建StringLiteral节点
+    return {
+      type: 'StringLiteral',
+      value
+    }
+  }
+
+  const createIdentifier = (name) => { // 用来创建Identifier节点
+    return {
+      type: 'Identifier',
+      name
+    }
+  }
+
+  const createArrayExpression = (elements) => {  // 用来创建ArrayExpression节点
+    return {
+      type: 'ArrayExpression',
+      elements
+    }
+  }
+
+  const createCallExpression = (callee, arguments) => {  // 用来创建CallExpression节点
+    return {
+      type: 'CallExpression',
+      callee: createIdentifier(callee),
+      arguments
+    }
+  }
+
+  const genNodeList = (nodes, context) => {
+    const {push} = context
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i]
+      genNode(node, context)
+      if (i < nodes.length - 1) {
+        push(', ')
+      }
+    }
+  }
+
+
+  const genFunctionDecl = (node, context) => {
+    const {push, indent, deIndent} = context
+    push(`function ${node.id.name}`)
+    push('(')
+    genNodeList(node.params, context)
+    push(') ')
+    push('{')
+    indent()
+    node.body.forEach(n => genNode(n, context))
+    deIndent(),
+    push('}')
+  }
+
+  const genReturnStatement = (node, context) => {
+    const {push} = context
+    push('return ')
+    genNode(node.return, context)
+  }
+
+  const genStringLiteral = (node, context) => {
+    const {push} = context
+    push(`${node.value}`)
+  }
+
+  const genCallExpression = (node, context) => {
+    const {push} = context
+    const {callee, arguments: args} = node
+    push(`${callee.name}(`)
+    genNodeList(args, context)
+    push(')')
+  }
+
+  const genArrayExpression = (node, context) => {
+    const {push} = context
+    push('[')
+    genNodeList(node.elements, context)
+    push(']')
+  }
+
+
+  // console.log(ast.jsNode);  // 模板ast所对应的JavaScript ast就存储在ast根节点的jsNode中
+
+  const genNode = (node, context) => { // 匹配不同类型节点，并调用与之对应的生成器函数
+    switch (node.type) {
+      case 'FunctionDecl':
+        genFunctionDecl(node, context)
+        break;
+      case 'ReturnStatement':
+        genReturnStatement(node, context)
+        break;
+      case 'CallExpression':
+        genCallExpression(node, context)
+        break;
+      case 'StringLiteral':
+        genStringLiteral(node, context)
+        break;
+      case 'ArrayExpression':
+        genArrayExpression(node, context)
+        break;
+    }
+  }
+
+
+  const generate = (node) => { // node: JavaScript ast
+    console.log(node);
+    const context = { // 上下文
+      code: '',   // 存储最终生成的渲染函数代码
+      push(code) {
+        context.code += code
+      },
+      currentIndent: 0,
+      newline() {  // 换行函数
+        context.code += '\n' + ` `.repeat(context.currentIndent)
+      },
+      indent() {  // 用来进行缩进
+        context.currentIndent++
+        context.newline()
+      },
+      deIndent() {  // 用来取消缩进
+        context.currentIndent--
+        context.newline()
+      }
+    }
+
+    genNode(node, context)  // 代码生成本质上是字符串拼接的艺术
+    return context.code
+  }
+
+  const compile = (template) => { // 编译函数
+    const ast = parse(template) // 获取模板ast
+    transform(ast)
+    const code = generate(ast.jsNode)
+    return code
+  }
+
+  const code = compile('<div><p>vue</p><p>template</p></div>')
+  console.log(code, 'code');
+
+
+
+
+
+</script>
+</html>

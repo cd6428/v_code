@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Document</title>
+</head>
+<body>
+  
+</body>
+<script>
+  const data = {}
+  const proto = {bar: 1}
+
+  const bucket = new WeakMap()
+  let activeEffect
+  const effectStack = []
+  const ITERATOR_KEY = Symbol()
+
+  const reactive = (obj) => {
+    return new Proxy(obj, {
+      get (target, key, receiver) {
+        track(target, key)
+        return Reflect.get(...arguments)
+      },
+      has (target, key) {
+        track(target, key)
+        return Reflect.has(...arguments)
+      },
+      ownKeys (target) {
+        console.log('成功代理forin');
+        track(target, ITERATOR_KEY)
+        return Reflect.ownKeys(...arguments)
+      },
+      set (target, key, val, receiver) {
+        const oldValue = target[key]
+        const type = Object.prototype.hasOwnProperty.call(target, key) ? 'SET' : 'ADD'
+        Reflect.set(...arguments)
+        console.log(type, 'type');
+        if (oldValue !== val && (oldValue === oldValue || val === val)) { // 当旧值不等于新值时，才触发trigger函数
+          trigger(target, key, type)
+        }
+      },
+      deleteProperty (target, key) {
+        const hadKey = Object.prototype.hasOwnProperty.call(target, key)
+        const res = Reflect.deleteProperty(...arguments)
+        if (hadKey && res) {
+          trigger(target, key, 'DELETE')
+        }
+      }
+    })
+  }
+
+  const child = reactive(data)
+  const parent = reactive(proto)
+  Object.setPrototypeOf(child, parent)
+
+  function track (target, key) {
+    if (!activeEffect) return; 
+    let depsMap = bucket.get(target)
+    if (!depsMap) bucket.set(target, (depsMap = new Map()));
+    let deps = depsMap.get(key)
+    if (!deps) depsMap.set(key, (deps = new Set())); 
+    deps.add(activeEffect)
+    activeEffect.deps.push(deps)
+  }
+
+  const trigger = (target, key, type) => {
+    const depsMap = bucket.get(target)
+    if (!depsMap) return;
+    const deps = depsMap.get(key)
+    const effectDeps = new Set()
+    deps && deps.forEach(item => {
+      if (item !== activeEffect) {
+        effectDeps.add(item)
+      }
+    })
+    if (type === 'ADD' || type === 'DELETE') {
+      // 取得与ITERATOR_KEY相关联的副作用函数
+      const iteratorEffect = depsMap.get(ITERATOR_KEY)
+      // 将与ITERATOR_KEY相关联的副作用函数添加到effectDeps中
+      iteratorEffect && iteratorEffect.forEach(iterator => {
+        if (iterator !== activeEffect) {
+          effectDeps.add(iterator)
+        }
+      })
+    }
+    effectDeps.forEach(fn => {
+      if (fn.options.scheduler) {
+        fn.options.scheduler(fn)  // 执行调度器函数，并传递副作用函数作为参数
+      } else {
+        fn()
+      }
+    })
+  }
+
+  const effect = (fn, options = {}) => {
+    const effectFn = () => {
+      cleanup(effectFn)
+      activeEffect = effectFn
+      effectStack.push(effectFn)
+      const res = fn()
+      effectStack.pop()
+      activeEffect = effectStack.at(-1)
+      return res
+    }
+    effectFn.options = options
+    effectFn.deps = []
+    if (!options.lazy) {
+      effectFn()
+    }
+    return effectFn
+  }
+
+  const cleanup = (effectFn) => {
+    for (let i = 0; i < effectFn.deps.length; i++) {
+      const dep = effectFn.deps[i];
+      dep.delete(effectFn)
+    }
+    effectFn.deps.length = 0
+  }
+
+
+
+  effect(() => {
+      console.log(child.bar);
+  })
+
+  child.bar = 2
+
+
+
+
+
+</script>
+</html>

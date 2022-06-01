@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Document</title>
+</head>
+<body>
+
+</body>
+<script>
+  const data = [1, 2]
+  const obj = {}
+  const bucket = new WeakMap()
+  let activeEffect
+  const effectStack = []
+  const ITERATOR_KEY = Symbol()
+  const MAP_KEY_ITERATOR_KEY = Symbol()
+  const reactiveMap = new Map()
+
+  const ref = (val) => {
+    const wrapper = {value: val}
+    Object.defineProperty(wrapper, '_v_isRef', {
+      value: true
+    })
+    return reactive(wrapper)
+  }
+
+  const mutableInstrumentations = {    // 自定义函数
+    add (key) {    // 代理set
+      const target = this.raw
+      const hadKey = target.has(key)
+      if (!hadKey) {
+        const res = target.add(key)
+        trigger(target, key, 'ADD')
+      }
+      return res
+    },
+    delete (key) {   // 代理set
+      const target = this.raw
+      const hadKey = target.has(key)
+      if (hadKey) {
+        const res = target.delete(key)
+        trigger(target, key, 'DELETE')
+      }
+      return res
+    },
+    get (key) {   // 代理map
+      const target = this.raw
+      const had = target.has(key)
+      track(target, key)
+      if (had) {
+        const res = target.get(key)
+        return typeof res === 'object' ? reactive(res) : res
+      }
+    },
+    set (key, value) {  // 代理map
+      const target = this.raw
+      const had = target.has(key)
+      const oldValue = target.get(key)
+      const rawValue = value.raw || value
+      target.set(key, rawValue)
+      if (!had) {
+        trigger(target, key, 'ADD')
+      } else if (oldValue !== value || (oldValue === oldValue && value === value)) {
+        trigger(target, key, 'SET')
+      }
+    },
+    forEach (cb) {
+      const wrap = (val) => {
+        return typeof val === 'object' ? reactive(val) : val
+      }
+      const target = this.raw
+      track(target, ITERATOR_KEY)
+      target.forEach((v, k) => {
+        cb(wrap(v), wrap(k))
+      })
+    },
+    [Symbol.iterator] () {
+      const target = this.raw
+      const iterator = target[Symbol.iterator]()
+      const wrap = (val) => {
+        return typeof val === 'object' && val !== null ? reactive(val) : val
+      }
+      track(target, ITERATOR_KEY)
+      return {  // 返回自定义迭代器 
+        next () {
+          const {value, done} = iterator.next()
+          return {
+            value: value ? [wrap[value[0]], wrap[value[1]]] : value,
+            done
+          }
+        },
+        [Symbol.iterator] () {
+          return this
+        }
+      }
+    },
+    values () {
+      const target = this.raw
+      const iterator = target.values()
+      const wrap = (val) => {
+        return typeof val === 'object' && val !== null ? reactive(val) : val
+      }
+      track(target, ITERATOR_KEY)
+      return {  // 返回自定义迭代器 
+        next () {
+          const {value, done} = iterator.next()
+          return {
+            value: wrap(value),
+            done
+          }
+        },
+        [Symbol.iterator] () {
+          return this
+        }
+      }
+    },
+    keys () {
+      const target = this.raw
+      const iterator = target.keys()
+      const wrap = (val) => {
+        return typeof val === 'object' && val !== null ? reactive(val) : val
+      }
+      track(target, MAP_KEY_ITERATOR_KEY)
+      return {  // 返回自定义迭代器 
+        next () {
+          const {value, done} = iterator.next()
+          return {
+            value: wrap(value),
+            done
+          }
+        },
+        [Symbol.iterator] () {
+          return this
+        }
+      }
+    }
+  }
+
+  const createReactive = (obj, isShallow = false, isReadonly = false) => {
+    return new Proxy(obj, {
+      get (target, key, receiver) {
+        if (key === 'raw') {
+          return target
+        }
+        // if (key === 'size') {
+        //   track(target, ITERATOR_KEY)
+        //   return Reflect.get(target, key, target)
+        // }
+        // return mutableInstrumentations[key]
+        track(target, key)
+        return Reflect.get(...arguments)
+      },
+      set (target, key, val, receiver) {
+        if (isReadonly) {
+          console.log(`属性${key}是只读的`);
+          return true
+        }
+        const oldValue = target[key]
+        const type = Array.isArray(target) ? Number(key) < target.length ? 'SET' : 'ADD' : Object.prototype.hasOwnProperty.call(target, key) ? 'SET' : 'ADD'
+        const res = Reflect.set(...arguments)
+        console.log(type, 'type');
+        if (target === receiver.raw) {// 判断receiver是否是target的代理对象,是则执行副作用函数,不是则不执行
+          if (oldValue !== val && (oldValue === oldValue || val === val)) { // 当旧值不等于新值时，才触发trigger函数
+            trigger(target, key, type, val)
+          }
+        }
+        return res
+      }
+    })
+  }
+
+
+  function track (target, key) {
+    if (!activeEffect) return; 
+    let depsMap = bucket.get(target)
+    if (!depsMap) bucket.set(target, (depsMap = new Map()));
+    let deps = depsMap.get(key)
+    if (!deps) depsMap.set(key, (deps = new Set())); 
+    deps.add(activeEffect)
+    activeEffect.deps.push(deps)
+  }
+
+  const trigger = (target, key, type, newVal) => {
+    console.log('set函数执行');
+    const depsMap = bucket.get(target)
+    if (!depsMap) return; 
+    const deps = depsMap.get(key)
+    const effectDeps = new Set()
+    deps && deps.forEach(item => {
+      if (item !== activeEffect) {
+        effectDeps.add(item)
+      }
+    })
+    if (type === 'ADD' || type === 'DELETE' || (type === 'SET' && Object.prototype.toString.call(target) === '[object Map]')) { // target: 对象
+      // 取得与ITERATOR_KEY相关联的副作用函数
+      const iteratorEffect = depsMap.get(ITERATOR_KEY)
+      // 将与ITERATOR_KEY相关联的副作用函数添加到effectDeps中
+      iteratorEffect && iteratorEffect.forEach(iterator => {
+        if (iterator !== activeEffect) {
+          effectDeps.add(iterator)
+        }
+      })
+    }
+    if ((type === 'ADD' || type === 'DELETE') && Object.prototype.toString.call(target) === '[object Map]') {
+      const iteratorEffect = depsMap.get(MAP_KEY_ITERATOR_KEY)
+      // 将与ITERATOR_KEY相关联的副作用函数添加到effectDeps中
+      iteratorEffect && iteratorEffect.forEach(iterator => {
+        if (iterator !== activeEffect) {
+          effectDeps.add(iterator)
+        }
+      }) 
+    }
+    effectDeps.forEach(fn => {
+      if (fn.options.scheduler) {
+        fn.options.scheduler(fn)  // 执行调度器函数，并传递副作用函数作为参数
+      } else {
+        fn()
+      }
+    })
+  }
+
+  const effect = (fn, options = {}) => {
+    const effectFn = () => {
+      cleanup(effectFn)
+      activeEffect = effectFn
+      effectStack.push(effectFn)
+      const res = fn()
+      effectStack.pop()
+      activeEffect = effectStack.at(-1)
+      return res
+    }
+    effectFn.options = options
+    effectFn.deps = []
+    if (!options.lazy) {
+      effectFn()
+    }
+    return effectFn
+  }
+
+  const cleanup = (effectFn) => {
+    for (let i = 0; i < effectFn.deps.length; i++) {
+      const dep = effectFn.deps[i];
+      dep.delete(effectFn)
+    }
+    effectFn.deps.length = 0
+  }
+
+  const reactive = (obj) => {
+    const existProxy = reactiveMap.get(obj)
+    if (existProxy) {
+      return existProxy
+    }
+    const proxy = createReactive(obj)
+    reactiveMap.set(obj, proxy)
+    return proxy
+  }
+
+  const p = reactive({foo: 1, bar: 2})
+  // const refVal = ref(2) // 创建原始值的响应式数据
+
+  const newObj = {
+    foo: {
+      get value() {
+        return p.foo
+      }
+    },
+    bar: {
+      get value() {
+        return p.bar
+      }
+    }
+  }
+  effect(() => {
+    console.log(newObj.foo.value);
+  })
+
+
+  p.foo = 100
+
+
+
+</script>
+</html>
