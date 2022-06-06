@@ -92,6 +92,54 @@
     }
   }
 
+  const parseText = (context) => {
+    let endIndex = context.source.length
+    const ltIndex = context.source.indexOf('<')
+    const delimiterIndex = context.source.indexOf('{{')
+    if (ltIndex > -1 && ltIndex < endIndex) {
+      endIndex = ltIndex
+    }
+    if (delimiterIndex > -1 && delimiterIndex < endIndex) {
+      endIndex = delimiterIndex
+    }
+    const content = context.source.slice(0, endIndex)
+    context.advanceBy(content.length)
+    return {
+      type: 'Text',
+      content
+    }
+  }
+
+  const parseInterpolation = (context) => {
+    context.advanceBy('{{'.length)
+    const closeIndex = context.source.indexOf('}}')
+    if (closeIndex < 0) {
+      console.error('差值缺少结束定界符')
+    }
+    const content = context.source.slice(0, closeIndex)
+    context.advanceBy(content.length)
+    context.advanceBy('}}'.length)
+    return {
+      type: 'Interpolation',
+      content: {
+        type: 'Expression',
+        content
+      }
+    }
+  }
+
+  const parseComment = (context) => {
+    context.advanceBy('<!--'.length)
+    const closeIndex = context.source.indexOf('-->')
+    const content = context.source.slice(0, closeIndex)
+    context.advanceBy(content.length)
+    context.advanceBy('-->'.length)
+    return {
+      type: 'Comment',
+      content
+    }
+  }
+
   const parseElement = (context, ancestors) => {
     const element = parseTag(context)
     if (element.isSelfClosing) return true;
@@ -180,7 +228,9 @@
     }
   }  
 
-  const ast = parse('<div id="foo" v-show="display"></div>')
+  // const ast = parse('<div id="foo" v-show="display"></div>')
+  // const ast = parse('<div>Text&lt;</div>')
+  // const ast = parse('<div>foo {{bar}} baz</div>')   // 这行代码解析页面加载失败，问题在哪里？
 
   console.log(ast,'-----')
 
