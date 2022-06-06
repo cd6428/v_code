@@ -48,23 +48,48 @@
       }
     }
 
+    const patchBlockChildren = (n1, n2) => {
+      for (let i = 0; i < n2.dynamicChildren.length; i++) {
+        patchElement(n1.dynamicChildren[i], n2.dynamicChildren[i])
+      }
+    }
+
     const patchElement = (n1, n2) => { // 打补丁(更新)
       const el = n2.el = n1.el
       const oldProps = n1.props
       const newProps = n2.props
       // 第一步：更新这个props
-      for (const key in newProps) {
-        if (newProps[key] !== oldProps[key]) {
-          patchProps(el, key, oldProps[key], newProps[key])
+
+      if (n2.patchFlags) { // 如果有补丁标志，那么直接靶向更新需要更新的地方即可,避免全量更新，提升性能
+        if (n2.patchFlags === 1) {
+          // 直接更新元素内容即可
+        } else if (n2.patchFlags === 2) {
+          // 更新元素class
+        } else if (n2.patchFlags === 3) {
+          // 更新元素style
+        } else if () {
+          // ...
+        }
+      } else {
+        // 全量更新
+        for (const key in newProps) {
+          if (newProps[key] !== oldProps[key]) {
+            patchProps(el, key, oldProps[key], newProps[key])
+          }
+        }
+        for (const key in oldProps) {
+          if (!(key in newProps)) {
+            patchProps(el, key, oldProps[key], null)
+          }
         }
       }
-      for (const key in oldProps) {
-        if (!(key in newProps)) {
-          patchProps(el, key, oldProps[key], null)
-        }
+      
+      // 第二步：更新children,判断是否有动态节点集合,如果有dynamicChildren，直接对比动态节点，节省性能
+      if (n2.dynamicChildren) {
+        patchBlockChildren(n1, n2)
+      } else {
+        patchChildren(n1, n2, el)
       }
-      // 第二步：更新children
-      patchChildren(n1, n2, el)
     }
 
     const shouldSetAsProps = (el, key) => {
